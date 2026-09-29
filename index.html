@@ -64,6 +64,7 @@
   #results td.time { text-align: right; font-variant-numeric: tabular-nums; font-weight: 800; opacity: .85; }
   .btnrow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 2.8vh; }
   #trackName { color: var(--y1); }
+  .award { margin: 1.6vh 0 0; font-weight: 800; font-size: max(15px, 2vh); color: #ff9f6b; }
 
   /* Mobil */
   #pad { position: fixed; inset: 0; display: flex; flex-direction: column; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
@@ -92,6 +93,13 @@
   #brakePill { position: absolute; left: 50%; bottom: 17vh; transform: translateX(-50%); background: #ff3b3b; color: #fff; font-family: 'Russo One'; padding: 8px 20px;
     border-radius: 999px; letter-spacing: 3px; pointer-events: none; box-shadow: 0 0 30px rgba(255,59,59,.6); }
   #hint { position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; font-size: 12px; opacity: .45; pointer-events: none; }
+  #dmgRow { display: flex; align-items: center; gap: 10px; padding: 12px 18px 0; font-weight: 800; font-size: 12px; letter-spacing: 1.5px; }
+  #dmgBar { flex: 1; height: 10px; border-radius: 99px; background: rgba(255,255,255,.1); overflow: hidden; }
+  #dmgFill { height: 100%; width: 0; border-radius: 99px; background: #34d06a; transition: width .3s, background .3s; }
+  #dmgTxt { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+  #flash { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 90px 20px rgba(255,40,40,.85); opacity: 0; z-index: 3; }
+  #ctrl.jolt { animation: jolt .32s; }
+  @keyframes jolt { 20% { transform: translate(-7px, 3px); } 40% { transform: translate(6px, -4px); } 60% { transform: translate(-4px, 2px); } 80% { transform: translate(2px, -1px); } }
 </style>
 </head>
 <body>
@@ -148,6 +156,8 @@
   </div>
   <div id="ctrl" class="hidden">
     <div id="top"><span id="topCar"></span><span id="topName" class="display"></span><span id="topInfo"></span></div>
+    <div id="dmgRow"><span>SKADOR</span><div id="dmgBar"><div id="dmgFill"></div></div><span id="dmgTxt">0%</span></div>
+    <div id="flash"></div>
     <div id="zones">
       <div class="zone" id="zl"><div class="btn"><svg viewBox="0 0 24 24"><path d="M15 4 7 12l8 8"/></svg></div></div>
       <div class="zone" id="zr"><div class="btn"><svg viewBox="0 0 24 24"><path d="M9 4l8 8-8 8"/></svg></div></div>
@@ -164,6 +174,7 @@ const WW = 1600, WH = 900;               // världens storlek
 const HALF_W = 54, STEP = 8, LAPS = 3, MAX_PLAYERS = 8;
 const ACC = 300, BRAKE = 650, MAX_ROAD = 340, MAX_OFF = 150;
 const TURN = 3.1, GRIP_OFF = 2.5, CAR_R = 14;
+const CR = 9.8, I_CAR = 120, E_CAR = .35, MU = .3;   // krockfysik: två cirklar per bil, tröghetsmoment, studs, friktion
 const TILT = .72;                        // hur mycket höjd lyfter saker uppåt på skärmen (2.5D)
 const SUN = { x: .55, y: .38 };          // skuggans riktning per höjdenhet
 const PREFIX = 'rally-v1-';
@@ -239,7 +250,7 @@ const newCanvas = (w, h) => { const c = document.createElement('canvas'); c.widt
 //  LJUD – allt syntetiseras med Web Audio (inga ljudfiler behövs)
 // =====================================================================
 const Sound = (() => {
-  let ac = null, musicBus, sfxBus, noiseBuf, rumbleG, skidG, crowdG, windG, lastPop = 0;
+  let ac = null, musicBus, sfxBus, noiseBuf, rumbleG, skidG, crowdG, windG, scrapeG, lastPop = 0;
   let musicOn = true, sfxOn = true, mode = null, step = 0, nextT = 0;
   try { musicOn = localStorage.getItem('rallyMusic') !== '0'; sfxOn = localStorage.getItem('rallySfx') !== '0'; } catch (e) {}
   const engs = new Map();
@@ -265,6 +276,7 @@ const Sound = (() => {
     skidG = loopNoise('bandpass', 1500);
     crowdG = loopNoise('bandpass', 900);
     windG = loopNoise('lowpass', 500);
+    scrapeG = loopNoise('bandpass', 2600);
     setInterval(schedule, 25);
   }
   function loopNoise(type, f) {
@@ -435,6 +447,28 @@ const Sound = (() => {
       burst(w, .28, 'lowpass', 900, .6); burst(w, .1, 'highpass', 2500, .25);
       tone(95, w, .25, 'sine', .5, null, 35);
     },
+    crunch(k) {                         // plåt mot plåt
+      if (!ac) return;
+      const w = ac.currentTime;
+      burst(w, .16 + k * .25, 'bandpass', 1500 + Math.random() * 1500, .3 + k * .35);
+      burst(w, .12, 'lowpass', 500, .15 + k * .45);
+      for (const f of [420, 610, 890, 1330]) tone(f * (.9 + Math.random() * .2), w, .1 + k * .25, 'square', .02 + k * .03);
+      tone(110, w, .16, 'sine', .1 + k * .45, null, 45);
+    },
+    glass() {
+      if (!ac) return;
+      const w = ac.currentTime;
+      burst(w, .3, 'highpass', 4500, .3);
+      for (let i = 0; i < 7; i++) tone(2500 + Math.random() * 3500, w + i * .025 + Math.random() * .02, .1, 'sine', .05);
+    },
+    clank() {                           // en del lossnar och studsar i marken
+      if (!ac) return;
+      const w = ac.currentTime;
+      tone(740, w, .25, 'triangle', .12); tone(1110, w + .02, .2, 'triangle', .08);
+      burst(w, .08, 'bandpass', 2500, .2);
+      tone(620, w + .28, .15, 'triangle', .06);
+    },
+    scrape(v) { if (ac) scrapeG.gain.setTargetAtTime(v, ac.currentTime, .05); },
     pop() {
       if (!ac || ac.currentTime - lastPop < .05) return;
       const w = lastPop = ac.currentTime;
@@ -484,7 +518,7 @@ const BG_SCALE = 2;
 
 // ---------- Förrenderad grafik (byggs bara på TV:n) ----------
 const CAR_SW = 46, CAR_SH = 30, SPR = 4;
-let carSets = [], bg, skid, skctx, shadowSpr, dustSprs, smokeSpr, cloudSpr, vig, gradeSpr;
+let carSets = [], bg, skid, skctx, shadowSpr, dustSprs, smokeSpr, darkSmokeSpr, crackSpr, cloudSpr, vig, gradeSpr;
 
 // Bilen byggs av lager som staplas på höjden ("sprite stacking") – ger 3D-känsla
 function makeCarSet(color, num) {
@@ -562,7 +596,14 @@ function makeCarSet(color, num) {
       g.fillStyle = shade(color, -.5); rr(-20, -9, 4.4, 18, 1.2); g.fill();
       g.fillStyle = shade(color, -.15); rr(-19.6, -8.6, 3.6, 17.2, 1); g.fill();
     }),
-    mirrors: mk((g, rr) => { g.fillStyle = shade(color, -.2); rr(5, -10.2, 2.8, 1.9, .8); g.fill(); rr(5, 8.3, 2.8, 1.9, .8); g.fill(); }),
+    lampsDead: mk(g => {
+      [-5.4, -1.8, 1.8, 5.4].forEach((y, i) => {
+        g.fillStyle = '#1a1a1a'; g.beginPath(); g.arc(14.2 - (i === 1 ? 1 : 0), y, 1.7, 0, 7); g.fill();
+        g.fillStyle = i === 2 ? '#fffbe8' : '#4a4f58'; g.beginPath(); g.arc(14.4, y, 1.1, 0, 7); g.fill();
+      });
+    }),
+    mirrorL: mk((g, rr) => { g.fillStyle = shade(color, -.2); rr(5, -10.2, 2.8, 1.9, .8); g.fill(); }),
+    mirrorR: mk((g, rr) => { g.fillStyle = shade(color, -.2); rr(5, 8.3, 2.8, 1.9, .8); g.fill(); }),
     mud: mud('#6b4a2a'), snow: mud('#f4f7fb'),
   };
 }
@@ -587,6 +628,19 @@ function initGfx() {
   g.scale(SPR, SPR); g.translate(CAR_SW / 2, CAR_SH / 2);
   g.beginPath(); g.roundRect(-17 - 2000 / SPR, -9, 35, 18, 5); g.fill();
   smokeSpr = makeDust('205,205,212');
+  darkSmokeSpr = makeDust('50,50,56');
+  crackSpr = newCanvas(CAR_SW * SPR, CAR_SH * SPR);   // sprucken vindruta
+  const kg = crackSpr.getContext('2d');
+  kg.scale(SPR, SPR); kg.translate(CAR_SW / 2, CAR_SH / 2);
+  kg.beginPath(); kg.rect(3, -6.9, 7.5, 13.8); kg.clip();
+  kg.strokeStyle = 'rgba(235,245,255,.9)'; kg.lineWidth = .35;
+  for (let k = 0; k < 10; k++) {
+    let x = 8.2, y = -1.5, an = k / 10 * 6.28;
+    kg.beginPath(); kg.moveTo(x, y);
+    for (let j = 0; j < 4; j++) { an += (Math.random() - .5) * .8; x += Math.cos(an) * 1.7; y += Math.sin(an) * 1.7; kg.lineTo(x, y); }
+    kg.stroke();
+  }
+  kg.beginPath(); kg.arc(8.2, -1.5, 1.2, 0, 7); kg.stroke();
   cloudSpr = newCanvas(520, 320);
   const cg = cloudSpr.getContext('2d');
   for (let k = 0; k < 9; k++) {
@@ -1222,7 +1276,10 @@ function resetCars() {
       x: gp.x, y: gp.y, a: gp.a, vx: 0, vy: 0, idx: gp.idx, prog: gp.idx - T.N, lastLap: 1,
       done: false, time: 0, off: false, slide: 0, rear: null, wait: false,
       dirt: 0, gear: 0, wasB: 0, flameT: 0, surf: 'road', lastSplash: 0,
+      av: 0, hz: 0, vz: 0, dmg: 0, dz: { f: 0, r: 0, l: 0, rt: 0 }, bendF: 0, bendR: 0, hits: 0,
+      lostWing: false, lostML: false, lostMR: false, cracked: false, smokeAnn: false,
     });
+    if (p.dctx) p.dctx.clearRect(-CAR_SW, -CAR_SH, CAR_SW * 2, CAR_SH * 2);
   });
 }
 
@@ -1254,21 +1311,108 @@ function ranking() {
 }
 const lapOf = p => clamp(Math.floor(p.prog / T.N) + 1, 1, LAPS);
 
-function buzz(p) {
+function buzz(p, ms = 60) {
   const now = performance.now();
-  if (now - p.lastBuzz > 300 && p.conn.open) { p.lastBuzz = now; p.conn.send({ t: 'buzz' }); }
+  if (now - p.lastBuzz > 250 && p.conn.open) { p.lastBuzz = now; p.conn.send({ t: 'buzz', ms: Math.round(ms) }); }
 }
 
-function hit(p, k, kind, x, y, quiet) {
-  buzz(p);
+// j = stöten (impulsen) i krocken – ju hårdare, desto mer skada
+function hit(p, j, kind, x, y, quiet) {
+  const k = clamp(j / 300, .1, 1);
+  damage(p, j * (kind === 'bale' ? .45 : kind === 'car' ? 1 : .9), x, y);
+  buzz(p, 40 + k * 180);
+  if (j > 250 && p.hz === 0 && state === 'race') p.vz = Math.min(80, (j - 230) * .45);   // hårda smällar lyfter bilen
   const now = performance.now();
-  if (quiet || now - p.lastHit < 180) return;
+  if (quiet || now - p.lastHit < 150) return;
   p.lastHit = now;
-  if (kind === 'car') { Sound.thump(k); spawnBits(x, y, 10, 'spark'); }
-  else if (kind === 'tree') { Sound.crash(); spawnBits(x, y, 14, TH.snow ? 'snow' : 'leaf'); }
-  else if (kind === 'bale') { Sound.thump(.7); spawnBits(x, y, 14, 'straw'); }
-  else { Sound.crash(); spawnBits(x, y, 8, 'rock'); }
-  shake = Math.max(shake, 3 + k * 6);
+  if (kind === 'car') { Sound.crunch(k); spawnBits(x, y, 6 + k * 10, 'spark'); }
+  else if (kind === 'tree') { Sound.crunch(k * .8); spawnBits(x, y, 14, TH.snow ? 'snow' : 'leaf'); }
+  else if (kind === 'bale') { Sound.thump(k * .8); spawnBits(x, y, 14, 'straw'); }
+  else { Sound.crunch(k); spawnBits(x, y, 8, 'rock'); }
+  shake = Math.max(shake, 2 + k * 7);
+}
+
+// Skador sitter där smällen kom: fram, bak, vänster eller höger sida
+function damage(p, j, cx, cy) {
+  if (j < 45 || state !== 'race') return;
+  const amt = Math.min(.35, (j - 45) / 850);
+  const dx = cx - p.x, dy = cy - p.y, ca = Math.cos(p.a), sa = Math.sin(p.a);
+  const lx = dx * ca + dy * sa, ly = -dx * sa + dy * ca;
+  const zone = lx > 7 ? 'f' : lx < -7 ? 'r' : ly < 0 ? 'l' : 'rt';
+  p.dz[zone] = Math.min(1, p.dz[zone] + amt * 1.7);
+  p.dmg = Math.min(1, p.dmg + amt);
+  p.hits++;
+  if (zone === 'f') p.bendF = clamp(p.bendF + (ly < 0 ? 1 : -1) * amt * .6, -.22, .22);
+  if (zone === 'r') p.bendR = clamp(p.bendR + (ly < 0 ? -1 : 1) * amt * .6, -.22, .22);
+  addDent(p, lx, ly, amt);
+  if (amt > .05) spawnDebris(p, cx, cy, 2 + Math.floor(amt * 12));
+  const tell = txt => { if (!banners.length) banner(txt, false, COLORS[p.c]); };
+  if (!p.lostWing && p.dz.r > .55) { p.lostWing = true; spawnPart(p, 'wing'); Sound.clank(); tell(`${p.name} tappade vingen!`); }
+  if (!p.lostML && p.dz.l > .5) { p.lostML = true; spawnPart(p, 'mirrorL'); Sound.clank(); }
+  if (!p.lostMR && p.dz.rt > .5) { p.lostMR = true; spawnPart(p, 'mirrorR'); Sound.clank(); }
+  if (!p.cracked && p.dz.f > .35) { p.cracked = true; Sound.glass(); spawnBits(cx, cy, 10, 'glass'); }
+  if (!p.smokeAnn && p.dmg > .7) { p.smokeAnn = true; tell(`${p.name} ryker!`); }
+}
+
+// Bucklor och repor ritas in i en egen bild per bil
+function addDent(p, lx, ly, amt) {
+  if (!p.dctx) {
+    p.dcv = newCanvas(CAR_SW * SPR, CAR_SH * SPR);
+    p.dctx = p.dcv.getContext('2d');
+    p.dctx.scale(SPR, SPR); p.dctx.translate(CAR_SW / 2, CAR_SH / 2);
+  }
+  const g = p.dctx, x = clamp(lx, -16, 16), y = clamp(ly, -8, 8), r = 2.5 + amt * 16;
+  g.save();
+  g.beginPath(); g.roundRect(-17, -8.5, 34, 17, 5); g.clip();
+  const gr = g.createRadialGradient(x, y, 0, x, y, r);
+  gr.addColorStop(0, 'rgba(0,0,0,.7)'); gr.addColorStop(.55, 'rgba(0,0,0,.3)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+  g.strokeStyle = 'rgba(255,255,255,.35)'; g.lineWidth = .5;
+  g.beginPath(); g.arc(x - .6, y - .6, r * .5, 3.4, 5.4); g.stroke();
+  g.strokeStyle = 'rgba(0,0,0,.4)'; g.lineWidth = .4;
+  for (let k = 0; k < 3 + amt * 10; k++) {
+    const an = Math.random() * 6.28, l = r * (.3 + Math.random() * .6);
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(an) * l, y + Math.sin(an) * l * .7); g.stroke();
+  }
+  g.strokeStyle = 'rgba(215,220,228,.85)';
+  for (let k = 0; k < 2 + amt * 12; k++) {
+    const sx = x + (Math.random() - .5) * r, sy = y + (Math.random() - .5) * r * .6;
+    const an = (Math.random() - .5) * .8 + (Math.random() < .5 ? 0 : Math.PI), l = 2 + Math.random() * 6;
+    g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + Math.cos(an) * l, sy + Math.sin(an) * l * .3); g.stroke();
+  }
+  g.restore();
+}
+
+// Stöt mellan bil och fast hinder (träd, sten, höbal). n pekar från hindret mot bilen.
+function impulseStatic(p, cx, cy, nx, ny) {
+  const rx = cx - p.x, ry = cy - p.y;
+  const vn = (p.vx - p.av * ry) * nx + (p.vy + p.av * rx) * ny;
+  if (vn >= 0) return 0;
+  const rn = rx * ny - ry * nx;
+  const j = -(1 + E_CAR) * vn / (1 + rn * rn / I_CAR);
+  p.vx += j * nx; p.vy += j * ny; p.av += rn * j / I_CAR;
+  return j;
+}
+
+// Stöt mellan två bilar, med friktion så att de skrapar och snurrar. n pekar från a mot b.
+let scrapeLvl = 0;
+function carImpulse(a, b, cx, cy, nx, ny) {
+  const rax = cx - a.x, ray = cy - a.y, rbx = cx - b.x, rby = cy - b.y;
+  const rvx = (b.vx - b.av * rby) - (a.vx - a.av * ray);
+  const rvy = (b.vy + b.av * rbx) - (a.vy + a.av * rax);
+  const vn = rvx * nx + rvy * ny;
+  if (vn >= 0) return 0;
+  const raN = rax * ny - ray * nx, rbN = rbx * ny - rby * nx;
+  const jn = -(1 + E_CAR) * vn / (2 + raN * raN / I_CAR + rbN * rbN / I_CAR);
+  const tx = -ny, ty = nx, vt = rvx * tx + rvy * ty;
+  const raT = rax * ty - ray * tx, rbT = rbx * ty - rby * tx;
+  const jt = clamp(-vt / (2 + raT * raT / I_CAR + rbT * rbT / I_CAR), -MU * jn, MU * jn);
+  const ix = jn * nx + jt * tx, iy = jn * ny + jt * ty;
+  a.vx -= ix; a.vy -= iy; a.av -= (rax * iy - ray * ix) / I_CAR;
+  b.vx += ix; b.vy += iy; b.av += (rbx * iy - rby * ix) / I_CAR;
+  scrapeLvl = Math.max(scrapeLvl, Math.min(1, Math.abs(vt) / 250));
+  if (Math.abs(vt) > 90 && Math.random() < .5) spawnBits(cx, cy, 2, 'spark');
+  return jn;
 }
 
 let lastTick = performance.now(), lastStatus = 0;
@@ -1317,7 +1461,7 @@ function tick() {
     if (!endAt && list.every(p => p.done)) endAt = now + 2500;
     if (!endAt && firstFinish && now - firstFinish > 20000) endAt = now;
     if (endAt && now >= endAt) {
-      lastResults = ranking().map(p => ({ name: p.name, c: p.c, time: p.done ? p.time : null }));
+      lastResults = ranking().map(p => ({ name: p.name, c: p.c, time: p.done ? p.time : null, dmg: p.dmg }));
       setState('results');
       Sound.music('lobby');
       Sound.cheer();
@@ -1346,29 +1490,57 @@ function stepCar(p, dt) {
     }
   }
 
+  // Skador gör bilen långsammare och får den att dra åt ena sidan
+  const hp = 1 - p.dmg, air = p.hz > 0;
+  max *= .72 + .28 * hp;
+  const pull = vf > 40 ? (p.dz.rt - p.dz.l) * .12 : 0;
+  const steer = p.done ? 0 : clamp(p.s + pull, -1, 1);
+
   const braking = p.done || p.b;
-  if (braking) vf = Math.max(0, vf - BRAKE * (p.done ? .4 : 1) * dt);
-  else if (vf < max) vf = Math.min(max, vf + ACC * dt);
-  if (vf > max) vf -= (vf - max) * 2.5 * dt;
-  vl *= Math.exp(-grip * dt);
+  if (!air) {
+    if (braking) vf = Math.max(0, vf - BRAKE * (p.done ? .4 : 1) * dt);
+    else if (vf < max) vf = Math.min(max, vf + ACC * (.7 + .3 * hp) * dt);
+    if (vf > max) vf -= (vf - max) * 2.5 * dt;
+    vl *= Math.exp(-grip * dt);
+  }
   p.vx = fx * vf - fy * vl;
   p.vy = fy * vf + fx * vl;
-  p.a += (p.done ? 0 : p.s) * TURN * Math.max(.35, Math.min(1, vf / 120)) * dt;
+  if (!air) p.a += steer * TURN * Math.max(.35, Math.min(1, vf / 120)) * dt;
+  p.a += p.av * dt;                                           // snurr från krockar
+  p.av *= Math.exp(-(air ? .3 : p.off ? 2.5 : grip * .8) * dt);
   p.x += p.vx * dt;
   p.y += p.vy * dt;
+  if (air || p.vz > 0) {                                      // hopp efter hårda smällar
+    p.vz -= 300 * dt;
+    p.hz += p.vz * dt;
+    if (p.hz <= 0) {
+      if (p.vz < -50) {
+        Sound.thump(clamp(-p.vz / 200, .2, .8));
+        shake = Math.max(shake, 3);
+        for (let k = 0; k < 6; k++) dust.push({ x: p.x, y: p.y, h: 0, vx: (Math.random() - .5) * 90, vy: (Math.random() - .5) * 90, life: 1, max: 1, r: 6, spr: dustSprs[0] });
+      }
+      p.hz = 0; p.vz = 0;
+    }
+  }
   if (p.x < CAR_R || p.x > WW - CAR_R) { p.x = clamp(p.x, CAR_R, WW - CAR_R); p.vx *= -.3; }
   if (p.y < CAR_R || p.y > WH - CAR_R) { p.y = clamp(p.y, CAR_R, WH - CAR_R); p.vy *= -.3; }
 
-  for (const o of T.obst) {
-    const dx = p.x - o.x, dy = p.y - o.y, min = CAR_R + o.r;
-    if (Math.abs(dx) > min || Math.abs(dy) > min) continue;
-    const d = Math.hypot(dx, dy);
-    if (d < min && d > 0) {
-      const nx = dx / d, ny = dy / d, vn = p.vx * nx + p.vy * ny;
-      p.x = o.x + nx * min; p.y = o.y + ny * min;
-      if (vn < 0) {
-        p.vx = (p.vx - 1.5 * vn * nx) * .6; p.vy = (p.vy - 1.5 * vn * ny) * .6;
-        if (-vn > 40) hit(p, clamp(-vn / 300, .2, 1), o.kind, o.x + nx * o.r, o.y + ny * o.r);
+  // Hinder: bilen är två cirklar (fram och bak), så smällar i hörnen ger snurr
+  for (const ox of [9, -9]) {
+    const cx = p.x + Math.cos(p.a) * ox, cy = p.y + Math.sin(p.a) * ox;
+    for (const o of T.obst) {
+      const dx = cx - o.x, dy = cy - o.y, min = CR + o.r;
+      if (Math.abs(dx) > min || Math.abs(dy) > min) continue;
+      const d = Math.hypot(dx, dy);
+      if (d >= min || d === 0) continue;
+      const nx = dx / d, ny = dy / d;
+      p.x += nx * (min - d); p.y += ny * (min - d);
+      const px = o.x + nx * o.r, py = o.y + ny * o.r;
+      const j = impulseStatic(p, px, py, nx, ny);
+      if (j > 30) {
+        const keep = o.kind === 'bale' ? .75 : .85;
+        p.vx *= keep; p.vy *= keep;
+        hit(p, j, o.kind, px, py);
       }
     }
   }
@@ -1429,20 +1601,20 @@ function collideCars(list) {
   for (let i = 0; i < list.length; i++) {
     for (let j = i + 1; j < list.length; j++) {
       const a = list[i], b = list[j];
-      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
-      if (d >= CAR_R * 2 || d === 0) continue;
-      const nx = dx / d, ny = dy / d, push = (CAR_R * 2 - d) / 2;
-      a.x -= nx * push; a.y -= ny * push;
-      b.x += nx * push; b.y += ny * push;
-      const rel = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
-      if (rel < 0) {
-        const imp = -1.4 * rel / 2;
-        a.vx -= imp * nx; a.vy -= imp * ny;
-        b.vx += imp * nx; b.vy += imp * ny;
-        if (-rel > 60) {
-          const k = clamp(-rel / 300, .2, 1), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-          hit(a, k, 'car', mx, my);
-          hit(b, k, 'car', mx, my, true);
+      if (Math.abs(a.x - b.x) > 42 || Math.abs(a.y - b.y) > 42 || Math.abs(a.hz - b.hz) > 14) continue;
+      for (const oa of [9, -9]) for (const ob of [9, -9]) {
+        const ax = a.x + Math.cos(a.a) * oa, ay = a.y + Math.sin(a.a) * oa;
+        const bx = b.x + Math.cos(b.a) * ob, by = b.y + Math.sin(b.a) * ob;
+        const dx = bx - ax, dy = by - ay, d = Math.hypot(dx, dy);
+        if (d >= CR * 2 || d === 0) continue;
+        const nx = dx / d, ny = dy / d, pen = (CR * 2 - d) / 2;
+        a.x -= nx * pen; a.y -= ny * pen;
+        b.x += nx * pen; b.y += ny * pen;
+        const cx = ax + nx * CR, cy = ay + ny * CR;
+        const jn = carImpulse(a, b, cx, cy, nx, ny);
+        if (jn > 30) {
+          hit(a, jn, 'car', cx, cy);
+          hit(b, jn, 'car', cx, cy, true);
         }
       }
     }
@@ -1457,7 +1629,7 @@ function sendStatus() {
     if (!p.conn.open) continue;
     p.conn.send({
       t: 'me', st: state, c: p.c, name: p.name, wait: p.wait, done: p.done,
-      lap: p.wait ? 0 : lapOf(p), laps: LAPS, pos: r.indexOf(p) + 1, n: r.length, cd,
+      lap: p.wait ? 0 : lapOf(p), laps: LAPS, pos: r.indexOf(p) + 1, n: r.length, cd, dmg: Math.round((p.dmg || 0) * 100),
     });
   }
 }
@@ -1481,6 +1653,8 @@ function renderLobby() {
   $('results').innerHTML = showRes
     ? '<table>' + lastResults.map((r, i) => `<tr><td class="medal">${['🥇', '🥈', '🥉'][i] || i + 1 + '.'}</td><td><span class="chip">${carSvg(COLORS[r.c], 30)}${esc(r.name)}</span></td><td class="time">${r.time == null ? 'Ej i mål' : fmt(r.time)}</td></tr>`).join('') + '</table>'
     : '';
+  const wreck = showRes ? [...lastResults].sort((a, b) => b.dmg - a.dmg)[0] : null;
+  if (wreck && wreck.dmg > .1) $('results').innerHTML += `<p class="award">💥 Krockkung: <b>${esc(wreck.name)}</b> · ${Math.round(wreck.dmg * 100)} % skador</p>`;
   $('startBtn').textContent = state === 'results' ? 'Kör igen' : 'Starta loppet';
   $('startBtn').disabled = !list.length;
 }
@@ -1497,6 +1671,7 @@ const BIT_COLORS = {
   spark: ['#fff3b0', '#ffd23f', '#ff9f1c'], leaf: ['#2e6a3e', '#3f8a3a', '#6cb85a'], straw: ['#f2d479', '#d9b24c', '#fff0a8'],
   rock: ['#a0a6ad', '#6b7075'], gravel: ['#6d5231', '#d8c09a', '#8a6a3e'], grass: ['#3f7f3a', '#5a9a45', '#6d5a36'],
   snow: ['#ffffff', '#e6eef7', '#cfdceb'], splash: ['#7d8a91', '#a9bcc8', '#5c4a36'], water: ['#9fd0f0', '#e8f6ff', '#5aa0cc'],
+  glass: ['#e8f7ff', '#a9d8f5', '#ffffff'],
 };
 function spawnBits(x, y, n, kind, dx = 0, dy = 0) {
   for (let k = 0; k < n && bits.length < 500; k++) {
@@ -1505,8 +1680,37 @@ function spawnBits(x, y, n, kind, dx = 0, dy = 0) {
     bits.push({
       kind, x, y, h: 2, vh: kind === 'spark' ? 20 : 25 + Math.random() * 35, vx: Math.cos(an) * sp + dx, vy: Math.sin(an) * sp + dy, life, max: life,
       size: kind === 'leaf' || kind === 'straw' || kind === 'snow' ? 2.5 + Math.random() * 2 : 1.5 + Math.random() * 1.5, color: pick(BIT_COLORS[kind]),
+      stamp: kind === 'glass',
     });
   }
+}
+// Lackflagor och plastbitar som flyger iväg och blir liggande på banan
+function spawnDebris(p, x, y, n) {
+  for (let k = 0; k < n && bits.length < 500; k++) {
+    const an = Math.random() * 6.283, sp = 60 + Math.random() * 140, life = .5 + Math.random() * .6;
+    bits.push({
+      kind: 'debris', x, y, h: 3, vh: 30 + Math.random() * 50, vx: Math.cos(an) * sp + p.vx * .3, vy: Math.sin(an) * sp + p.vy * .3,
+      life, max: life, size: 1.5 + Math.random() * 2.2, rot: Math.random() * 6, vr: (Math.random() - .5) * 20, stamp: true,
+      color: Math.random() < .6 ? COLORS[p.c] : pick(['#1d1e22', '#8a8f98', '#cfd6e0']),
+    });
+  }
+}
+function spawnPart(p, part) {
+  const ox = part === 'wing' ? -18 : 5, oy = part === 'mirrorL' ? -9 : part === 'mirrorR' ? 9 : 0;
+  const ca = Math.cos(p.a), sa = Math.sin(p.a), an = Math.random() * 6.283;
+  bits.push({
+    kind: 'part', x: p.x + ca * ox - sa * oy, y: p.y + sa * ox + ca * oy, h: 10, vh: 70,
+    vx: p.vx * .5 + Math.cos(an) * 60, vy: p.vy * .5 + Math.sin(an) * 60, life: 1.4, max: 1.4,
+    w: part === 'wing' ? 4.4 : 2.8, l: part === 'wing' ? 18 : 2, rot: p.a, vr: (Math.random() - .5) * 18, stamp: true,
+    color: shade(COLORS[p.c], part === 'wing' ? -.35 : -.2),
+  });
+}
+function stampBit(b) {
+  skctx.save(); skctx.translate(b.x, b.y); skctx.rotate(b.rot || 0);
+  skctx.fillStyle = 'rgba(0,0,0,.3)';
+  if (b.kind === 'part') { skctx.fillRect(-b.w / 2 + 1, -b.l / 2 + 1, b.w, b.l); skctx.fillStyle = b.color; skctx.fillRect(-b.w / 2, -b.l / 2, b.w, b.l); }
+  else { skctx.fillStyle = b.color; skctx.fillRect(-b.size / 2, -b.size * .3, b.size, b.size * .6); }
+  skctx.restore();
 }
 const CONF = ['#ff4747', '#2f9bff', '#ffcc1f', '#34d06a', '#ff8a1f', '#a86bff', '#ff5fae', '#ffffff'];
 const makeConf = (x, y, vx, vy) => ({ x, y, vx, vy, rot: Math.random() * 6, vr: (Math.random() - .5) * 10, col: pick(CONF), life: 6, w: 7 + Math.random() * 5, h: 4 + Math.random() * 3 });
@@ -1608,6 +1812,8 @@ function draw() {
     };
   }));
   Sound.ambience(state === 'race' ? .02 + Math.min(excite, 1) * .05 : .006, TH.snow ? .05 : 0);
+  Sound.scrape(state === 'race' ? scrapeLvl * .3 : 0);
+  scrapeLvl *= Math.pow(.02, fdt);
 }
 const clouds = [{ x: 100, y: 40, s: 1.6, v: 9 }, { x: 800, y: 420, s: 1.3, v: 12 }, { x: 1300, y: 120, s: 1.8, v: 7 }, { x: -400, y: 560, s: 1.4, v: 10 }];
 
@@ -1662,29 +1868,43 @@ function drawCar(p, now) {
   const pop = clamp((now - p.spawnT) / 450, 0, 1), s = pop < 1 ? Math.max(.01, easeOutBack(pop)) : 1;
   const roll = -(p.s || 0) * clamp(sp / 300, 0, 1) * .12;       // karossen lutar utåt i kurvor
   const pitch = p.b && sp > 20 ? .07 : 0;                          // nosen dyker vid inbromsning
-  const bounce = p.off && sp > 40 ? Math.sin(now * .045 + p.c * 2) * .7 : 0;
+  const bounce = (p.off && sp > 40 && !p.hz ? Math.sin(now * .045 + p.c * 2) * .7 : 0) + p.hz;
+  // Skrynklad front/bak: bilden delas i två halvor som krymps och böjs var för sig
+  const kF = 1 - p.dz.f * .28, kR = 1 - p.dz.r * .28, split = p.dz.f > .01 || p.dz.r > .01;
+  const HW = CAR_SW / 2, HH = CAR_SH / 2, SW = CAR_SW * SPR / 2, SH = CAR_SH * SPR;
+  const img = spr => {
+    if (!split) { ctx.drawImage(spr, -HW, -HH, CAR_SW, CAR_SH); return; }
+    ctx.save(); ctx.rotate(p.bendR); ctx.drawImage(spr, 0, 0, SW, SH, -HW * kR, -HH, HW * kR, CAR_SH); ctx.restore();
+    ctx.save(); ctx.rotate(p.bendF); ctx.drawImage(spr, SW - 2, 0, SW + 2, SH, -.5 * kF, -HH, (HW + .5) * kF, CAR_SH); ctx.restore();
+  };
   const atLayer = (h, fn) => {
     ctx.save();
     ctx.translate(0, -(h * s + bounce) * TILT); ctx.rotate(p.a); ctx.translate(pitch * h, roll * h); ctx.scale(s, s);
     fn();
     ctx.restore();
   };
-  const layer = (spr, h, a) => atLayer(h, () => { if (a != null) ctx.globalAlpha = a; ctx.drawImage(spr, -CAR_SW / 2, -CAR_SH / 2, CAR_SW, CAR_SH); });
+  const layer = (spr, h, a) => atLayer(h, () => { if (a != null) ctx.globalAlpha = a; img(spr); });
 
-  ctx.save(); ctx.translate(p.x + SUN.x * 6, p.y + SUN.y * 6); ctx.rotate(p.a); ctx.scale(s, s);
-  ctx.drawImage(shadowSpr, -CAR_SW / 2, -CAR_SH / 2, CAR_SW, CAR_SH);
+  ctx.save(); ctx.translate(p.x + SUN.x * (6 + p.hz), p.y + SUN.y * (6 + p.hz)); ctx.rotate(p.a); ctx.scale(s, s);
+  ctx.globalAlpha = 1 / (1 + p.hz * .04);
+  ctx.drawImage(shadowSpr, -HW, -HH, CAR_SW, CAR_SH);
   ctx.restore();
 
   ctx.save(); ctx.translate(p.x, p.y);
   const st = p.done || state === 'results' ? 0 : (p.s || 0) * .45;
+  const wob = t => Math.sin(now * .025 + t) * .35;
   for (let h = 0; h <= 3.6; h += .9) {
-    ctx.save(); ctx.translate(0, -h * s * TILT); ctx.rotate(p.a); ctx.scale(s, s);
+    ctx.save(); ctx.translate(0, -(h * s + p.hz) * TILT); ctx.rotate(p.a); ctx.scale(s, s);
     ctx.fillStyle = h > 1.5 && h < 2.5 ? '#3a3d45' : '#141518';
-    for (const [wx, wy, fr] of WHEELS) {
-      ctx.save(); ctx.translate(wx, wy); if (fr) ctx.rotate(st);
+    WHEELS.forEach(([wx, wy, fr], i) => {
+      ctx.save(); ctx.rotate(fr ? p.bendF : p.bendR); ctx.translate(wx * (fr ? kF : kR), wy);
+      let r = fr ? st : 0;
+      if (i === 2 && p.dz.f > .6) r += wob(0);             // skadat hjul vinglar
+      if (i === 1 && p.dz.r > .6) r += wob(2);
+      ctx.rotate(r);
       ctx.beginPath(); ctx.roundRect(-4, -2.2, 8, 4.4, 1.6); ctx.fill();
       ctx.restore();
-    }
+    });
     ctx.restore();
   }
   const mud = TH.snow ? set.snow : set.mud;
@@ -1693,20 +1913,42 @@ function drawCar(p, now) {
   for (let h = 4; h < 5.2; h += .4) layer(set.side[1], h);
   layer(set.stripe, 5.2); layer(set.stripe, 5.5);
   for (let h = 5.8; h < 7.4; h += .4) layer(set.side[2], h);
+  if (p.dcv) for (const h of [2.8, 4.4, 6.4]) layer(p.dcv, h);
   if (p.dirt > .03) for (const h of [2.4, 3.6, 4.8, 6.2]) layer(mud, h, p.dirt * .9);
   layer(set.top, 7.5);
+  if (p.dcv) layer(p.dcv, 7.55);
   if (p.dirt > .03) layer(mud, 7.6, p.dirt * .45);
-  layer(set.lamps, 8); layer(set.lamps, 8.4);
-  layer(set.mirrors, 8.6);
-  layer(set.posts, 8.3); layer(set.posts, 9); layer(set.posts, 9.7);
+  const lamps = p.dz.f > .5 ? set.lampsDead : set.lamps;
+  layer(lamps, 8); layer(lamps, 8.4);
+  if (!p.lostML) layer(set.mirrorL, 8.6);
+  if (!p.lostMR) layer(set.mirrorR, 8.6);
+  if (!p.lostWing) { layer(set.posts, 8.3); layer(set.posts, 9); layer(set.posts, 9.7); }
   for (let h = 8; h < 9; h += .4) layer(set.glass[0], h);
+  if (p.cracked) layer(crackSpr, 8.9);
   for (let h = 9; h < 10; h += .4) layer(set.glass[1], h);
+  if (p.cracked) layer(crackSpr, 9.9);
   for (let h = 10; h < 11.1; h += .4) layer(set.glass[2], h);
-  layer(set.wing, 10.4); layer(set.wing, 10.8);
+  if (!p.lostWing) { layer(set.wing, 10.4); layer(set.wing, 10.8); }
   layer(set.roof, 11.3); layer(set.roof, 11.6);
 
+  // Rök (och till sist eld) från en trasig motor
+  if (p.dmg > .35 && smoke.length < 400 && Math.random() < (p.dmg - .3) * .9) {
+    smoke.push({
+      x: p.x + Math.cos(p.a) * 11, y: p.y + Math.sin(p.a) * 11 - (9 + p.hz) * TILT, r: 2, life: 1.6, max: 1.6,
+      vx: -p.vx * .15 + (Math.random() - .5) * 10, vy: -p.vy * .15 - 14, spr: p.dmg > .7 ? darkSmokeSpr : smokeSpr, a: .55,
+    });
+  }
+
   ctx.globalCompositeOperation = 'lighter';
-  if (state === 'race' && !p.done) atLayer(8.2, () => {
+  if (p.dmg > .9) atLayer(8.2, () => {
+    for (let k = 0; k < 3; k++) {
+      const x = 10 + Math.random() * 4, y = (Math.random() - .5) * 8, r = 3 + Math.random() * 4;
+      const gr = ctx.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, 'rgba(255,240,180,.95)'); gr.addColorStop(.4, 'rgba(255,140,30,.8)'); gr.addColorStop(1, 'rgba(255,40,0,0)');
+      ctx.fillStyle = gr; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+  });
+  if (state === 'race' && !p.done && p.dz.f <= .5) atLayer(8.2, () => {
     for (const y of [-5.4, -1.8, 1.8, 5.4]) {
       const gr = ctx.createRadialGradient(15, y, 0, 15, y, 4.5);
       gr.addColorStop(0, 'rgba(255,250,220,.55)'); gr.addColorStop(1, 'rgba(255,250,220,0)');
@@ -1824,13 +2066,21 @@ function drawDust(fdt) {
 }
 
 function drawBits(fdt) {
-  bits = bits.filter(b => (b.life -= fdt) > 0);
+  for (const b of bits) if ((b.life -= fdt) <= 0 && b.stamp) stampBit(b);
+  bits = bits.filter(b => b.life > 0);
   for (const b of bits) {
     const fr = 1 - (b.kind === 'spark' ? 2 : 4) * fdt;
     b.x += b.vx * fdt; b.y += b.vy * fdt; b.vx *= fr; b.vy *= fr;
     b.vh -= 140 * fdt; b.h = Math.max(0, b.h + b.vh * fdt);
+    if (b.vr) { b.rot += b.vr * fdt; if (!b.h) b.vr *= 1 - 5 * fdt; }
     const a = b.life / b.max, y = b.y - b.h * TILT;
-    if (b.kind === 'spark') {
+    if (b.kind === 'part' || b.kind === 'debris') {
+      ctx.save(); ctx.translate(b.x, y); ctx.rotate(b.rot);
+      ctx.fillStyle = b.color;
+      if (b.kind === 'part') ctx.fillRect(-b.w / 2, -b.l / 2, b.w, b.l);
+      else ctx.fillRect(-b.size / 2, -b.size * .3, b.size, b.size * .6);
+      ctx.restore();
+    } else if (b.kind === 'spark') {
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = a; ctx.strokeStyle = b.color; ctx.lineWidth = 1.6;
       ctx.beginPath(); ctx.moveTo(b.x, y); ctx.lineTo(b.x - b.vx * .04, y - b.vy * .04); ctx.stroke();
@@ -1851,9 +2101,9 @@ function drawSmoke(now, fdt) {
   }
   smoke = smoke.filter(s => (s.life -= fdt) > 0);
   for (const s of smoke) {
-    s.x += s.vx * fdt; s.y += s.vy * fdt; s.r += 5 * fdt;
-    ctx.globalAlpha = (s.life / s.max) * (TH.snow ? .45 : .28);
-    ctx.drawImage(smokeSpr, s.x - s.r, s.y - s.r, s.r * 2, s.r * 2);
+    s.x += s.vx * fdt; s.y += s.vy * fdt; s.r += (s.spr ? 9 : 5) * fdt;
+    ctx.globalAlpha = (s.life / s.max) * (s.a || (TH.snow ? .45 : .28));
+    ctx.drawImage(s.spr || smokeSpr, s.x - s.r, s.y - s.r, s.r * 2, s.r * 2);
   }
   ctx.globalAlpha = 1;
 }
@@ -1942,6 +2192,9 @@ function drawHud(now) {
     ctx.textAlign = 'right'; ctx.font = '700 13px Inter, system-ui, sans-serif';
     ctx.fillStyle = p.done ? '#ffd23f' : 'rgba(255,255,255,.65)';
     ctx.fillText(p.done ? fmt(p.time) : `${lapOf(p)}/${LAPS}`, x + 162, 32);
+    ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fillRect(x + 46, 44, 116, 3);        // skademätare
+    ctx.fillStyle = p.dmg < .4 ? '#34d06a' : p.dmg < .7 ? '#ffcc1f' : '#ff3b3b';
+    ctx.fillRect(x + 46, 44, 116 * (1 - p.dmg), 3);
   });
   ctx.textBaseline = 'alphabetic';
 }
@@ -2084,7 +2337,10 @@ $('padStart').onclick = () => padConn.send({ t: 'start' });
 
 function onPadData(d) {
   if (d.t === 'me') { me = d; renderPad(); }
-  else if (d.t === 'buzz') navigator.vibrate?.(60);
+  else if (d.t === 'buzz') {
+    navigator.vibrate?.(d.ms || 60);
+    if ((d.ms || 60) > 90) jolt();
+  }
   else if (d.t === 'go') navigator.vibrate?.(250);
   else if (d.t === 'full') $('padMsg').textContent = 'Spelet är fullt (max 8 förare).';
 }
@@ -2106,8 +2362,20 @@ function renderPad() {
   else if (me.st === 'results') { big = ord(me.pos); sub = ['🥇 Grattis!', '🥈 Snyggt!', '🥉 Bra kört!'][me.pos - 1] || 'Kör igen?'; start = true; }
   $('big').textContent = big;
   $('sub').textContent = sub;
+  const dmg = me.dmg || 0;
+  $('dmgFill').style.width = dmg + '%';
+  $('dmgFill').style.background = dmg < 40 ? '#34d06a' : dmg < 70 ? '#ffcc1f' : '#ff3b3b';
+  $('dmgTxt').textContent = dmg + '%';
   $('padStart').classList.toggle('hidden', !start);
   $('padStart').textContent = me.st === 'results' ? 'Kör igen' : 'Starta loppet';
+}
+
+// Skakning och röd kant vid hårda smällar (syns även på iPhone som inte kan vibrera)
+function jolt() {
+  const c = $('ctrl'), f = $('flash');
+  c.classList.remove('jolt'); void c.offsetWidth; c.classList.add('jolt');
+  f.style.transition = 'none'; f.style.opacity = 1;
+  requestAnimationFrame(() => requestAnimationFrame(() => { f.style.transition = 'opacity .5s'; f.style.opacity = 0; }));
 }
 
 function updateSteer() {
